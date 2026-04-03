@@ -65,6 +65,14 @@ type Proxy struct {
 	// absolute.
 	DefaultBaseURL *url.URL
 
+	// PrefixBaseURLs maps the first path segment of an incoming request to a
+	// base URL used to resolve relative remote URLs. For example, with
+	// PrefixBaseURLs["tms"] = https://storage.example.com/, a request to
+	// /tms/path/to/image.jpg is resolved against that base URL. Once the prefix
+	// is removed, the remainder of the path still uses the normal imageproxy URL
+	// format, so /tms/100x/path/to/image.jpg works as expected.
+	PrefixBaseURLs map[string]*url.URL
+
 	// The Logger used by the image proxy
 	Logger *log.Logger
 
@@ -238,7 +246,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveImage handles incoming requests for proxied images.
 func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
-	req, err := NewRequest(r, p.DefaultBaseURL)
+	req, err := p.newRequest(r)
 	if err != nil {
 		msg := fmt.Sprintf("invalid request URL: %v", err)
 		p.log(msg)
@@ -399,6 +407,106 @@ func (p *Proxy) now() time.Time {
 		return p.timeNow
 	}
 	return time.Now()
+}
+
+func (p *Proxy) newRequest(r *http.Request) (*Request, error) {
+	if prefixBaseURL, path, ok := p.prefixBaseURL(r.URL.EscapedPath()); ok {
+		req := cloneRequestWithPath(r, path)
+		if hasOptionsPath(path) {
+			return NewRequest(req, prefixBaseURL)
+		}
+		return newRequestWithoutOptions(req, prefixBaseURL)
+	}
+
+	return NewRequest(r, p.DefaultBaseURL)
+}
+
+func (p *Proxy) prefixBaseURL(path string) (_ *url.URL, strippedPath string, ok bool) {
+	if len(p.PrefixBaseURLs) == 0 {
+		return nil, "", false
+	}
+
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return nil, "", false
+	}
+
+	prefix, remainder, found := strings.Cut(path, "/")
+	baseURL, ok := p.PrefixBaseURLs[prefix]
+	if !ok {
+		return nil, "", false
+	}
+
+	strippedPath = "/"
+	if found {
+		strippedPath += remainder
+	}
+
+	return baseURL, strippedPath, true
+}
+
+func cloneRequestWithPath(r *http.Request, path string) *http.Request {
+	req := r.Clone(r.Context())
+
+	u := *r.URL
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil {
+		decodedPath = path
+		u.RawPath = ""
+	} else if decodedPath != path {
+		u.RawPath = path
+	} else {
+		u.RawPath = ""
+	}
+	u.Path = decodedPath
+
+	req.URL = &u
+	return req
+}
+
+func hasOptionsPath(path string) bool {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return false
+	}
+
+	options, _, _ := strings.Cut(path, "/")
+	return options == "" || options == "0x0" || ParseOptions(options) != (Options{})
+}
+
+func newRequestWithoutOptions(r *http.Request, baseURL *url.URL) (*Request, error) {
+	req := &Request{Original: r}
+
+	path := r.URL.EscapedPath()[1:] // strip leading slash
+	if path == "" {
+		return nil, URLError{"too few path segments", r.URL}
+	}
+
+	remoteURL, enc, err := parseURL(path, baseURL)
+	if err != nil {
+		return nil, URLError{fmt.Sprintf("unable to parse remote URL: %v", err), r.URL}
+	}
+	req.URL = remoteURL
+
+	if baseURL != nil {
+		req.URL = baseURL.ResolveReference(req.URL)
+	}
+
+	if !req.URL.IsAbs() {
+		return nil, URLError{"must provide absolute remote URL", r.URL}
+	}
+
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return nil, URLError{"remote URL must have http or https scheme", r.URL}
+	}
+
+	if !enc {
+		// if the remote URL was not base64 or URL encoded,
+		// then the query string is part of the remote URL
+		req.URL.RawQuery = r.URL.RawQuery
+	}
+
+	return req, nil
 }
 
 // allowed determines whether the specified request contains an allowed

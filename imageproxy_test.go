@@ -588,6 +588,67 @@ func TestProxy_ServeHTTP(t *testing.T) {
 	}
 }
 
+func TestProxy_newRequest(t *testing.T) {
+	defaultBaseURL, _ := url.Parse("https://default.example.com/root/")
+	tmsBaseURL, _ := url.Parse("https://tms.example.com/media/")
+	hrBaseURL, _ := url.Parse("https://hr.example.com/assets/")
+
+	p := &Proxy{
+		DefaultBaseURL: defaultBaseURL,
+		PrefixBaseURLs: map[string]*url.URL{
+			"tms": tmsBaseURL,
+			"hr":  hrBaseURL,
+		},
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "default base URL keeps legacy parsing",
+			path: "/avatars/user.png",
+			want: "https://default.example.com/root/user.png#0x0",
+		},
+		{
+			name: "unknown prefix falls back to legacy parsing",
+			path: "/finance/report.png",
+			want: "https://default.example.com/root/report.png#0x0",
+		},
+		{
+			name: "storage prefix without options",
+			path: "/tms/invoices/logo.png",
+			want: "https://tms.example.com/media/invoices/logo.png#0x0",
+		},
+		{
+			name: "storage prefix with options",
+			path: "/hr/100x/avatars/user.png",
+			want: "https://hr.example.com/assets/avatars/user.png#100x0",
+		},
+		{
+			name: "storage prefix preserves escaped path",
+			path: "/tms/http://example.com/%2C",
+			want: "http://example.com/%2C#0x0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://localhost"+tt.path, nil)
+
+			got, err := p.newRequest(req)
+			if err != nil {
+				t.Fatalf("newRequest(%q) returned unexpected error: %v", tt.path, err)
+			}
+
+			if got := got.String(); got != tt.want {
+				t.Errorf("newRequest(%q) returned %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 // test that 304 Not Modified responses are returned properly.
 func TestProxy_ServeHTTP_is304(t *testing.T) {
 	p := &Proxy{

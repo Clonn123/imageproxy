@@ -5,198 +5,130 @@
 [![Test Coverage](https://codecov.io/gh/willnorris/imageproxy/branch/main/graph/badge.svg)](https://codecov.io/gh/willnorris/imageproxy)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2611/badge)](https://bestpractices.coreinfrastructure.org/projects/2611)
 
-imageproxy is a caching image proxy server written in go. It features:
+imageproxy — это кэширующий прокси-сервер изображений, написанный на Go. Он предоставляет:
 
-- basic image adjustments like resizing, cropping, and rotation
-- access control using allowed hosts list or request signing (HMAC-SHA256)
-- support for jpeg, png, webp (decode only), tiff, and gif image formats
-  (including animated gifs)
-- caching in-memory, on disk, or with Amazon S3, Google Cloud Storage, Azure
-  Storage, or Redis
-- easy deployment, since it's pure go
+- базовые операции с изображениями: изменение размера, обрезка и поворот
+- контроль доступа с помощью списка разрешённых хостов или подписанных запросов (HMAC-SHA256)
+- поддержку форматов jpeg, png, webp (только декодирование), tiff и gif (включая анимированные gif)
+- кэширование в памяти, на диске или в Amazon S3, Google Cloud Storage, Azure Storage или Redis
+- простое развёртывание, поскольку это чистая реализация на Go
 
-Personally, I use it primarily to dynamically resize images hosted on my own
-site (read more in [this post][]). But you can also enable request signing and
-use it as an SSL proxy for remote images, similar to [atmos/camo][] but with
-additional image adjustment options.
+Я использую его в основном для динамического изменения размера изображений, размещённых на моём сайте (подробнее в [this post][]). Но вы также можете включить подпись запросов и использовать его как SSL-прокси для удалённых изображений, аналогично [atmos/camo][], с дополнительными возможностями трансформации изображений.
 
-I aim to keep imageproxy compatible with the two [most recent major go releases][].
-I also keep track of the minimum go version that still works (currently go1.18), but that might change at any time.
-You can see the go versions that are tested against in [.github/workflows/tests.yml][].
+Я стараюсь поддерживать совместимость imageproxy с двумя последними мажорными версиями Go. Кроме того, я отслеживаю минимальную версию Go, с которой всё ещё работает проект (в настоящее время go1.18), но это может измениться в любой момент. Список версий Go, против которых выполняются тесты, можно увидеть в [.github/workflows/tests.yml][].
 
-[this post]: https://willnorris.com/2014/01/a-self-hosted-alternative-to-jetpacks-photon-service
-[atmos/camo]: https://github.com/atmos/camo
-[most recent major go releases]: https://golang.org/doc/devel/release.html
-[.github/workflows/tests.yml]: ./.github/workflows/tests.yml
+## Структура URL
 
-## URL Structure
+URL-ы imageproxy имеют формат `http://localhost/{options}/{remote_url}`.
 
-imageproxy URLs are of the form `http://localhost/{options}/{remote_url}`.
+При использовании настроенных префиксов хранилища URL принимает вид
+`http://localhost/{storage}/{options}/{remote_url}` или
+`http://localhost/{storage}/{remote_url}`. Сегмент `{storage}` выбирает настроенный
+базовый URL, после чего оставшаяся часть пути парсится как обычно.
 
-### Options
+### Опции
 
-Options are available for cropping, resizing, rotation, flipping, and digital
-signatures among a few others. Options for are specified as a comma delimited
-list of parameters, which can be supplied in any order. Duplicate parameters
-overwrite previous values.
+Опции позволяют выполнять обрезку, изменение размера, поворот, отражение, цифровые подписи и ещё несколько действий. Опции задаются в виде списка параметров, разделённых запятыми, и могут быть указаны в любом порядке. Дублирующиеся параметры перезаписывают предыдущие значения.
 
-See the full list of available options at
-<https://pkg.go.dev/willnorris.com/go/imageproxy#ParseOptions>.
+Полный список доступных опций см. в <https://pkg.go.dev/willnorris.com/go/imageproxy#ParseOptions>.
 
-### Remote URL
+### Удалённый URL
 
-The URL of the original image to load is specified as the remainder of the
-path. It may be included in plain text without any encoding,
-percent-encoded (aka URL encoded), or base64 encoded (URL safe, no padding).
+URL исходного изображения указывается остатком пути. Он может быть указан в явном виде без кодирования, в percent-encoding (URL-encoded) или в base64 (URL-safe, без padding).
 
-When no encoding is used, any URL query string is treated as part of the remote URL.
-For example, given the proxy URL of `http://localhost/x/http://example.com/?id=1`,
-the remote URL is `http://example.com/?id=1`.
+Если кодирование не используется, любая query-строка в прокси-URL трактуется как часть удалённого URL. Например, при прокси-URL `http://localhost/x/http://example.com/?id=1` удалённый URL будет `http://example.com/?id=1`.
 
-When percent-encoding is used, the full URL must be encoded.
-Any query string on the proxy URL is NOT included as part of the remote URL.
-Percent-encoded URLs must be absolute URLs;
-they cannot be relative URLs used with a default base URL.
-For example, `http://localhost/x/http%3A%2F%2Fexample.com%2F%3Fid%3D1`.
+При использовании percent-encoding полный URL должен быть закодирован. Любая query-строка в прокси-URL НЕ включается в удалённый URL. Percent-encoded URL должны быть абсолютными; они не могут быть относительными URL, используемыми с базовым URL. Например: `http://localhost/x/http%3A%2F%2Fexample.com%2F%3Fid%3D1`.
 
-When base64 encoding is used, the full URL must be encoded.
-Any query string on the proxy URL is NOT included as part of the remote URL.
-Base64 encoded URLs may be relative URLs used with a default base URL.
-For example, `http://localhost/x/aHR0cDovL2V4YW1wbGUuY29tLz9pZD0x`.
+При использовании base64 кодируется весь URL. Любая query-строка в прокси-URL НЕ включается в удалённый URL. Base64-кодированные URL могут быть относительными и использованы с базовым URL. Например: `http://localhost/x/aHR0cDovL2V4YW1wbGUuY29tLz9pZD0x`.
 
-### Examples
+### Примеры
 
-The following live examples demonstrate setting different options on [this
-source image][small-things], which measures 1024 by 678 pixels.
-
-[small-things]: https://willnorris.com/images/imageproxy/small-things.jpg
+Ниже приведены живые примеры, демонстрирующие различные опции на [этом исходном изображении][small-things], которое имеет размер 1024×678.
 
 | Options                | Meaning                                                    | Image                                                                                                                                                                                                                                                                                                |
 | ---------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 200x                   | 200px wide, proportional height                            | <a href="https://willnorris.com/api/imageproxy/200x/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/200x/https://willnorris.com/images/imageproxy/small-things.jpg" alt="200x"></a>                                                       |
-| x0.15                  | 15% original height, proportional width                    | <a href="https://willnorris.com/api/imageproxy/x0.15/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/x0.15/https://willnorris.com/images/imageproxy/small-things.jpg" alt="x0.15"></a>                                                    |
-| 100x150                | 100 by 150 pixels, cropping as needed                      | <a href="https://willnorris.com/api/imageproxy/100x150/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100x150/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100x150"></a>                                              |
-| 100                    | 100px square, cropping as needed                           | <a href="https://willnorris.com/api/imageproxy/100/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100"></a>                                                          |
-| 150,fit                | scale to fit 150px square, no cropping                     | <a href="https://willnorris.com/api/imageproxy/150,fit/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/150,fit/https://willnorris.com/images/imageproxy/small-things.jpg" alt="150,fit"></a>                                              |
-| 100,r90                | 100px square, rotated 90 degrees                           | <a href="https://willnorris.com/api/imageproxy/100,r90/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100,r90/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100,r90"></a>                                              |
-| 100,fv,fh              | 100px square, flipped horizontal and vertical              | <a href="https://willnorris.com/api/imageproxy/100,fv,fh/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100,fv,fh/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100,fv,fh"></a>                                        |
-| 200x,q60               | 200px wide, proportional height, 60% quality               | <a href="https://willnorris.com/api/imageproxy/200x,q60/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/200x,q60/https://willnorris.com/images/imageproxy/small-things.jpg" alt="200x,q60"></a>                                           |
-| 200x,png               | 200px wide, converted to PNG format                        | <a href="https://willnorris.com/api/imageproxy/200x,png/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/200x,png/https://willnorris.com/images/imageproxy/small-things.jpg" alt="200x,png"></a>                                           |
-| cx175,cw400,ch300,100x | crop to 400x300px starting at (175,0), scale to 100px wide | <a href="https://willnorris.com/api/imageproxy/cx175,cw400,ch300,100x/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/cx175,cw400,ch300,100x/https://willnorris.com/images/imageproxy/small-things.jpg" alt="cx175,cw400,ch300,100x"></a> |
+| 200x                   | 200px по ширине, пропорциональная высота                   | <a href="https://willnorris.com/api/imageproxy/200x/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/200x/https://willnorris.com/images/imageproxy/small-things.jpg" alt="200x"></a>                                                       |
+| x0.15                  | 15% от оригинальной высоты, пропорциональная ширина        | <a href="https://willnorris.com/api/imageproxy/x0.15/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/x0.15/https://willnorris.com/images/imageproxy/small-things.jpg" alt="x0.15"></a>                                                    |
+| 100x150                | 100×150 пикселей, обрезка по необходимости                 | <a href="https://willnorris.com/api/imageproxy/100x150/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100x150/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100x150"></a>                                              |
+| 100                    | 100px квадрат, обрезка по необходимости                    | <a href="https://willnorris.com/api/imageproxy/100/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100"></a>                                                          |
+| 150,fit                | масштабировать, чтобы вписаться в 150px квадрат, без обрезки | <a href="https://willnorris.com/api/imageproxy/150,fit/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/150,fit/https://willnorris.com/images/imageproxy/small-things.jpg" alt="150,fit"></a>                                              |
+| 100,r90                | 100px квадрат, поворот 90 градусов                         | <a href="https://willnorris.com/api/imageproxy/100,r90/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100,r90/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100,r90"></a>                                              |
+| 100,fv,fh              | 100px квадрат, отражение по вертикали и горизонтали        | <a href="https://willnorris.com/api/imageproxy/100,fv,fh/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/100,fv,fh/https://willnorris.com/images/imageproxy/small-things.jpg" alt="100,fv,fh"></a>                                        |
+| 200x,q60               | 200px по ширине, пропорциональная высота, качество 60%      | <a href="https://willnorris.com/api/imageproxy/200x,q60/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/200x,q60/https://willnorris.com/images/imageproxy/small-things.jpg" alt="200x,q60"></a>                                           |
+| 200x,png               | 200px по ширине, конвертация в PNG                         | <a href="https://willnorris.com/api/imageproxy/200x,png/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/200x,png/https://willnorris.com/images/imageproxy/small-things.jpg" alt="200x,png"></a>                                           |
+| cx175,cw400,ch300,100x | обрезать до 400×300 начиная с (175,0), масштабировать до 100px ширины | <a href="https://willnorris.com/api/imageproxy/cx175,cw400,ch300,100x/https://willnorris.com/images/imageproxy/small-things.jpg"><img src="https://willnorris.com/api/imageproxy/cx175,cw400,ch300,100x/https://willnorris.com/images/imageproxy/small-things.jpg" alt="cx175,cw400,ch300,100x"></a> |
 
-The [smart crop feature](https://pkg.go.dev/willnorris.com/go/imageproxy#hdr-Smart_Crop-ParseOptions)
-can best be seen by comparing crops of [this source image][judah-sheets], with
-and without smart crop enabled.
+Функцию [smart crop](https://pkg.go.dev/willnorris.com/go/imageproxy#hdr-Smart_Crop-ParseOptions) лучше всего видно при сравнении обрезок [этого изображения][judah-sheets] с включённой и выключенной опцией smart crop.
 
 | Options    | Meaning                  | Image                                                                                                                                                                                                                                     |
 | ---------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 150x300    | 150x300px, standard crop | <a href="https://willnorris.com/api/imageproxy/150x300/https://judahnorris.com/images/judah-sheets.jpg"><img src="https://willnorris.com/api/imageproxy/150x300/https://judahnorris.com/images/judah-sheets.jpg" alt="200x400,sc"></a>    |
-| 150x300,sc | 150x300px, smart crop    | <a href="https://willnorris.com/api/imageproxy/150x300,sc/https://judahnorris.com/images/judah-sheets.jpg"><img src="https://willnorris.com/api/imageproxy/150x300,sc/https://judahnorris.com/images/judah-sheets.jpg" alt="200x400"></a> |
+| 150x300    | 150×300, стандартная обрезка | <a href="https://willnorris.com/api/imageproxy/150x300/https://judahnorris.com/images/judah-sheets.jpg"><img src="https://willnorris.com/api/imageproxy/150x300/https://judahnorris.com/images/judah-sheets.jpg" alt="200x400,sc"></a>    |
+| 150x300,sc | 150×300, smart crop       | <a href="https://willnorris.com/api/imageproxy/150x300,sc/https://judahnorris.com/images/judah-sheets.jpg"><img src="https://willnorris.com/api/imageproxy/150x300,sc/https://judahnorris.com/images/judah-sheets.jpg" alt="200x400"></a> |
 
 [judah-sheets]: https://judahnorris.com/images/judah-sheets.jpg
 
-Transformation also works on animated gifs. Here is [this source
-image][material-animation] resized to 200px square and rotated 270 degrees:
+Трансформации также работают с анимированными gif. Вот [это исходное изображение][material-animation], уменьшенное до квадрата 200px и повернутое на 270 градусов:
 
 [material-animation]: https://willnorris.com/images/imageproxy/material-animations.gif
 
 <a href="https://willnorris.com/api/imageproxy/200,r270/https://willnorris.com/images/imageproxy/material-animations.gif"><img src="https://willnorris.com/api/imageproxy/200,r270/https://willnorris.com/images/imageproxy/material-animations.gif" alt="200,r270"></a>
 
-## Getting Started
+## Начало работы
 
-Install the package using:
+Установите пакет командой:
 
 ```sh
 go install willnorris.com/go/imageproxy/cmd/imageproxy@latest
 ```
 
-Once installed, ensure `$GOPATH/bin` is in your `$PATH`, then run the proxy
-using:
+После установки убедитесь, что `$GOPATH/bin` находится в вашем `$PATH`, затем запустите прокси:
 
 ```sh
 imageproxy
 ```
 
-This will start the proxy on port 8080, without any caching and with no allowed
-host list (meaning any remote URL can be proxied). Test this by navigating to
-<http://localhost:8080/500/https://octodex.github.com/images/codercat.jpg> and
-you should see a 500px square coder octocat.
+Это запустит прокси на порту 8080, без кэширования и без списка разрешённых хостов (то есть можно проксировать любые удалённые URL). Проверьте, перейдя по адресу <http://localhost:8080/500/https://octodex.github.com/images/codercat.jpg> — вы должны увидеть квадратно обрезанное изображение coder octocat размером 500px.
 
-### Cache
+### Кэш
 
-By default, the imageproxy command does not cache responses, but caching can be
-enabled using the `-cache` flag. It supports the following values:
+По умолчанию команда imageproxy не кеширует ответы, но кэш можно включить с помощью флага `-cache`. Поддерживаются следующие варианты:
 
-- `memory` - uses an in-memory LRU cache. By default, this is limited to
-  100mb. To customize the size of the cache or the max age for cached items,
-  use the format `memory:size:age` where size is measured in mb and age is a
-  duration. For example, `memory:200:4h` will create a 200mb cache that will
-  cache items no longer than 4 hours.
-- directory on local disk (e.g. `/tmp/imageproxy`) - will cache images
-  on disk
+- `memory` — использует LRU-кэш в памяти. По умолчанию ограничен 100 МБ. Чтобы настроить размер кэша или максимальный возраст кэшируемых элементов, используйте формат `memory:size:age`, где размер указан в мегабайтах, а возраст — в формате продолжительности. Например, `memory:200:4h` создаст кэш на 200 МБ с максимальным временем хранения 4 часа.
+- директория на локальном диске (например, `/tmp/imageproxy`) — будет кэшировать изображения на диске
+- s3 URL (например, `s3://region/bucket-name/optional-path-prefix`) — будет кэшировать изображения в Amazon S3. Для этого нужна роль IAM и профиль экземпляра с правами доступа к бакету или переменные окружения `AWS_ACCESS_KEY_ID` и `AWS_SECRET_KEY`. (Дополнительные методы загрузки учётных данных описаны в пакете aws-sdk-go session).
 
-- s3 URL (e.g. `s3://region/bucket-name/optional-path-prefix`) - will cache
-  images on Amazon S3. This requires either an IAM role and instance profile
-  with access to your your bucket or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_KEY`
-  environmental variables be set. (Additional methods of loading credentials
-  are documented in the [aws-sdk-go session
-  package](https://docs.aws.amazon.com/sdk-for-go/api/aws/session/)).
+  Дополнительные параметры конфигурации ([подробно здесь][aws-options]) могут быть заданы в query-строке URL, что полезно при работе с S3-совместимыми сервисами:
 
-  Additional configuration options ([further documented here][aws-options])
-  may be specified as URL query string parameters, which are mostly useful
-  when working with s3-compatible services:
+  - "endpoint" — указать альтернативный API endpoint
+  - "disableSSL" — установить в "1", чтобы отключить SSL при вызовах API
+  - "s3ForcePathStyle" — установить в "1", чтобы принудительно использовать path-style addressing
 
-  - "endpoint" - specify an alternate API endpoint
-  - "disableSSL" - set to "1" to disable SSL when calling the API
-  - "s3ForcePathStyle" - set to "1" to force the request to use path-style addressing
-
-  For example, when working with [minio](https://minio.io), which doesn't use
-  regions, provide a dummy region value and custom endpoint value:
+  Например, при работе с [minio](https://minio.io), который не использует регионы, укажите фиктивный регион и кастомный endpoint:
 
   ```
   s3://fake-region/bucket/folder?endpoint=minio:9000&disableSSL=1&s3ForcePathStyle=1
   ```
 
-  Similarly, for [Digital Ocean Spaces](https://www.digitalocean.com/products/spaces/),
-  provide a dummy region value and the appropriate endpoint for your space:
+  Аналогично для [Digital Ocean Spaces](https://www.digitalocean.com/products/spaces/), укажите фиктивный регион и соответствующий endpoint для вашего пространства:
 
   ```
   s3://fake-region/bucket/folder?endpoint=sfo2.digitaloceanspaces.com
   ```
 
-  [aws-options]: https://docs.aws.amazon.com/sdk-for-go/api/aws/#Config
+- gcs URL (например, `gcs://bucket-name/optional-path-prefix`) — будет кэшировать в Google Cloud Storage. Аутентификация описана в документации Google про [Application Default Credentials](https://cloud.google.com/docs/authentication/production#providing_credentials_to_your_application).
+- azure URL (например, `azure://container-name/`) — будет кэшировать в Azure Storage. Для этого требуются переменные окружения `AZURESTORAGE_ACCOUNT_NAME` и `AZURESTORAGE_ACCESS_KEY`.
+- redis URL (например, `redis://hostname/`) — будет кэшировать на указанном redis-хосте. Полный синтаксис URL определяется [redis URI registration]. Вместо указания пароля в URI используйте переменную окружения `REDIS_PASSWORD`.
 
-- gcs URL (e.g. `gcs://bucket-name/optional-path-prefix`) - will cache images
-  on Google Cloud Storage. Authentication is documented in Google's
-  [Application Default Credentials
-  docs](https://cloud.google.com/docs/authentication/production#providing_credentials_to_your_application).
-- azure URL (e.g. `azure://container-name/`) - will cache images on
-  Azure Storage. This requires `AZURESTORAGE_ACCOUNT_NAME` and
-  `AZURESTORAGE_ACCESS_KEY` environment variables to bet set.
-- redis URL (e.g. `redis://hostname/`) - will cache images on
-  the specified redis host. The full URL syntax is defined by the [redis URI
-  registration](https://www.iana.org/assignments/uri-schemes/prov/redis).
-  Rather than specify password in the URI, use the `REDIS_PASSWORD`
-  environment variable.
-
-For example, to cache files on disk in the `/tmp/imageproxy` directory:
+Например, чтобы кэшировать файлы на диске в `/tmp/imageproxy`:
 
 ```sh
 imageproxy -cache /tmp/imageproxy
 ```
 
-Reload the [codercat URL][], and then inspect the contents of
-`/tmp/imageproxy`. Within the subdirectories, there should be two files, one
-for the original full-size codercat image, and one for the resized 500px
-version.
+Перезагрузите [codercat URL][], затем проверьте содержимое `/tmp/imageproxy`. В поддиректориях должны появиться два файла: один для оригинального полноразмерного изображения, и один — для уменьшенной 500px версии.
 
-[codercat URL]: http://localhost:8080/500/https://octodex.github.com/images/codercat.jpg
-
-Multiple caches can be specified by separating them by spaces or by repeating
-the `-cache` flag multiple times. The caches will be created in a [tiered
-fashion][]. Typically this is used to put a smaller and faster in-memory cache
-in front of a larger but slower on-disk cache. For example, the following will
-first check an in-memory cache for an image, followed by a gcs bucket:
+Несколько кэшей можно указать, разделяя их пробелами или повторяя флаг `-cache`. Кэши будут созданы в иерархическом порядке (tiered). Обычно это нужно, чтобы поместить небольшой и быстрый кэш в памяти перед большим, но более медленным дисковым кэшем. Например, следующая конфигурация сначала проверяет память, затем gcs-бакет:
 
 ```sh
 imageproxy -cache memory -cache gcs://my-bucket/
@@ -204,229 +136,186 @@ imageproxy -cache memory -cache gcs://my-bucket/
 
 [tiered fashion]: https://pkg.go.dev/github.com/die-net/lrucache/twotier
 
-#### Override Cache Directives
+#### Переопределение директив кэширования
 
-By default, imageproxy will respect the caching directives in response headers,
-including the cache duration and explicit instructions **not** to cache the response,
-such as `no-store` and `private` cache-control directives.
+По умолчанию imageproxy уважает директивы кэширования в заголовках ответа, включая время жизни кэша и явные инструкции **не кешировать** (например, `no-store` или `private`).
 
-You can force imageproxy to cache responses, even if they explicitly say not to,
-by passing the `-forceCache` flag. Note that this is generally not recommended.
+Вы можете принудительно заставить imageproxy кэшировать ответы, даже если они явно запрещают это, с помощью флага `-forceCache`. Однако это не рекомендуется в большинстве случаев.
 
-A minimum cache duration can be set using the `-minCacheDuration` flag. This
-will extend the cache duration if the response header indicates a shorter value.
-If called without the `-forceCache` flag, this will have no effect on responses
-with the `no-store` or `private` directives.
+Минимальное время кэширования можно задать флагом `-minCacheDuration`. Это продлит время хранения в кэше, если в заголовке ответа указано меньшее значение. Если флаг `-forceCache` не указан, это не повлияет на ответы с директивами `no-store` или `private`.
 
 ```sh
 imageproxy -cache /tmp/imageproxy -minCacheDuration 5m
 ```
 
-### Allowed Referrer List
+### Список разрешённых рефереров
 
-You can limit images to only be accessible for certain hosts in the HTTP
-referrer header, which can help prevent others from hotlinking to images. It can
-be enabled by running:
+Вы можете ограничить доступ к изображениям по значению заголовка HTTP `Referer`, что помогает предотвратить хотлинкинг. Включается так:
 
 ```sh
-imageproxy  -referrers example.com
+imageproxy -referrers example.com
 ```
 
-Reload the [codercat URL][], and you should now get an error message. You can
-specify multiple hosts as a comma separated list, or prefix a host value with
-`*.` to allow all sub-domains as well.
+Перезагрузите [codercat URL][], и вы должны получить сообщение об ошибке. Можно указать несколько хостов через запятую или использовать префикс `*.` для разрешения поддоменов.
 
-### Allowed and Denied Hosts List
+### Списки разрешённых и запрещённых хостов
 
-You can limit the remote hosts that the proxy will fetch images from using the
-`allowHosts` and `denyHosts` flags. This is useful, for example, for locking
-the proxy down to your own hosts to prevent others from abusing it. Of course
-if you want to support fetching from any host, leave off these flags.
+Вы можете ограничить удалённые хосты, с которых прокси будет загружать изображения, с помощью флагов `allowHosts` и `denyHosts`. Это полезно, например, чтобы ограничить прокси доступом только к вашим собственным хостам. Если вы хотите разрешить любые хосты, не указывайте эти флаги.
 
-Try it out by running:
+Попробуйте:
 
 ```sh
 imageproxy -allowHosts example.com
 ```
 
-Reload the [codercat URL][], and you should now get an error message.
-Alternately, try running:
+Перезагрузите [codercat URL][], и вы увидите ошибку. Также можно выполнить:
 
 ```sh
 imageproxy -denyHosts octodex.github.com
 ```
 
-Reloading the [codercat URL][] will still return an error message.
+Если хост совпадает и с разрешённым, и с запрещённым списком, запрос будет отклонён.
 
-You can specify multiple hosts as a comma separated list to either flag, or
-prefix a host value with `*.` to allow or deny all sub-domains. You can
-also specify a netblock in CIDR notation (`127.0.0.0/8`) -- this is useful for
-blocking reserved ranges like `127.0.0.0/8`, `192.168.0.0/16`, etc.
+Можно указывать несколько хостов через запятую, использовать `*.` для поддоменов или задавать сетевые блоки в формате CIDR (`127.0.0.0/8`) — это удобно для блокировки зарезервированных диапазонов вроде `127.0.0.0/8`, `192.168.0.0/16` и т.п.
 
-If a host matches both an allowed and denied host, the request will be denied.
+### Список разрешённых Content-Type
 
-### Allowed Content-Type List
+Вы можете ограничить типы содержимого, которые проксируются, используя флаг `contentTypes`. По умолчанию установлен `image/*`, то есть imageproxy будет обрабатывать любые типы изображений. Можно задать несколько типов через запятую и использовать суффикс `*` для подстановки. Установите пустую строку, чтобы проксировать все запросы независимо от типа содержимого.
 
-You can limit what content types can be proxied by using the `contentTypes`
-flag. By default, this is set to `image/*`, meaning that imageproxy will
-process any image types. You can specify multiple content types as a comma
-separated list, and suffix values with `*` to perform a wildcard match. Set the
-flag to an empty string to proxy all requests, regardless of content type.
+### Подписанные запросы
 
-### Signed Requests
-
-Instead of an allowed host list, you can require that requests be signed. This
-is useful in preventing abuse when you don't have just a static list of hosts
-you want to allow. Signatures are generated using HMAC-SHA256 against the
-remote URL, and url-safe base64 encoding the result:
+Вместо списка разрешённых хостов вы можете потребовать подписанные запросы. Это полезно, если вы не хотите поддерживать статический список хостов. Подписи генерируются с помощью HMAC-SHA256 по удалённому URL, затем результат кодируется в base64 URL-safe:
 
 ```
 base64urlencode(hmac.New(sha256, <key>).digest(<remote_url>))
 ```
 
-The HMAC key is specified using the `signatureKey` flag. If this flag
-begins with an "@", the remainder of the value is interpreted as a file on disk
-which contains the HMAC key.
+Ключ HMAC задаётся флагом `signatureKey`. Если значение флага начинается с `@`, оставшаяся часть интерпретируется как путь к файлу на диске, содержащему ключ.
 
-Try it out by running:
+Попробуйте:
 
 ```sh
 imageproxy -signatureKey "secretkey"
 ```
 
-Reload the [codercat URL][], and you should see an error message. Now load a
-[signed codercat URL][] (which contains the [signature option][]) and verify
-that it loads properly.
+Перезагрузите [codercat URL][], и вы увидите сообщение об ошибке. Затем загрузите [signed codercat URL][] (в котором присутствует опция [signature]) и убедитесь, что он открывается корректно.
 
-[signed codercat URL]: http://localhost:8080/500,sXyMwWKIC5JPCtlYOQ2f4yMBTqpjtUsfI67Sp7huXIYY=/https://octodex.github.com/images/codercat.jpg
-[signature option]: https://pkg.go.dev/willnorris.com/go/imageproxy#hdr-Signature-ParseOptions
+Некоторые примеры кода для генерации подписей на разных языках есть в [docs/url-signing.md](/docs/url-signing.md). Можно указать несколько валидных ключей для поддержки ротации ключей, повторяя флаг `signatureKey` несколько раз или передавая список ключей через пробел. Чтобы использовать ключ с пробелом, загрузите ключ из файла через префикс `@`.
 
-Some simple code samples for generating signatures in various languages can be
-found in [docs/url-signing.md](/docs/url-signing.md). Multiple valid signature
-keys may be provided to support key rotation by repeating the `signatureKey`
-flag multiple times, or by providing a space-separated list of keys. To use a
-key with a literal space character, load the key from a file using the "@"
-prefix documented above.
+Если указаны и whitelist, и signatureKey, то запросы, соответствующие whitelist, не обязаны быть подписанными (они могут быть подписаны, но это не обязательно).
 
-If both a whiltelist and signatureKey are specified, requests can match either.
-In other words, requests that match one of the allowed hosts don't necessarily
-need to be signed, though they can be.
-
-To limit how long a URL is valid (particularly useful for signed URLs),
-you can specify a "valid until" time using the `vu` option with a Unix timestamp.
-For example, the following signed URL would only be valid until 2020-01-01:
+Чтобы ограничить срок действия URL (полезно для подписанных URL), можно указать опцию `vu` со значением Unix-метки времени. Например, следующий подписанный URL будет действителен только до 2020-01-01:
 
 ```
 http://localhost:8080/vu1577836800,sjNcVf6LxzKEvR6Owgg3zhEMN7xbWxlpf-eyYbRfFK4A=/https://example.com/image
 ```
 
-### Default Base URL
+[signed codercat URL]: http://localhost:8080/500,sXyMwWKIC5JPCtlYOQ2f4yMBTqpjtUsfI67Sp7huXIYY=/https://octodex.github.com/images/codercat.jpg
+[signature option]: https://pkg.go.dev/willnorris.com/go/imageproxy#hdr-Signature-ParseOptions
 
-Typically, remote images to be proxied are specified as absolute URLs.
-However, if you commonly proxy images from a single source, you can provide a
-base URL and then specify remote images relative to that base. Try it out by
-running:
+### Базовый URL по умолчанию
+
+Обычно удалённые изображения задаются абсолютными URL. Однако, если вы часто проксируете изображения из одного источника, можно задать базовый URL и указывать удалённые изображения относительными путями. Попробуйте:
 
 ```sh
 imageproxy -baseURL https://octodex.github.com/
 ```
 
-Then load the codercat image, specified as a URL relative to that base:
-<http://localhost:8080/500/images/codercat.jpg>. Note that this is not an
-effective method to mask the true source of the images being proxied; it is
-trivial to discover the base URL being used. Even when a base URL is
-specified, you can always provide the absolute URL of the image to be proxied.
+Затем загрузите codercat, указав путь относительно базового URL:
+<http://localhost:8080/500/images/codercat.jpg>. Заметьте, это не скрывает реальный источник изображений — легко узнать базовый URL. Даже при заданном базовом URL вы всегда можете передать абсолютный URL изображения.
 
-### Scaling beyond original size
+### Несколько префиксов хранилищ
 
-By default, the imageproxy won't scale images beyond their original size.
-However, you can use the `scaleUp` command-line flag to allow this to happen:
+Если нужно, чтобы один экземпляр imageproxy обслуживал несколько исходных хранилищ, настройте флаг `storages` с JSON-объектом, который отображает первый сегмент пути на базовый URL:
+
+```sh
+imageproxy -storages '{"tms":"https://tms-storage.example.com/","hr":"https://hr-storage.example.com/"}'
+```
+
+Ту же настройку можно передать через переменную окружения `IMAGEPROXY_STORAGES`.
+
+После этого запросы вида:
+
+```text
+http://localhost:8080/tms/path/to/image.jpg
+http://localhost:8080/hr/300x/avatars/user.jpg
+```
+
+будут разрешаться относительно настроенного URL хранилища, а затем к ним будет применён обычный парсинг imageproxy.
+
+Если нужно разрешать файлы в поддиректории, включите завершающий слеш в базовом URL, например `https://storage.example.com/bucket/`.
+
+### Масштабирование больше оригинала
+
+По умолчанию imageproxy не увеличивает изображение больше его оригинального размера. Чтобы разрешить увеличение, используйте флаг `-scaleUp`:
 
 ```sh
 imageproxy -scaleUp true
 ```
 
-### WebP and TIFF support
+### Поддержка WebP и TIFF
 
-Imageproxy can proxy remote webp images, but they will be served in either jpeg
-or png format (this is because the golang webp library only supports webp
-decoding) if any transformation is requested. If no format is specified,
-imageproxy will use jpeg by default. If no transformation is requested (for
-example, if you are just using imageproxy as an SSL proxy) then the original
-webp image will be served as-is without any format conversion.
+imageproxy может проксировать удалённые webp-изображения, но при трансформации они будут возвращены в формате jpeg или png (потому что golang-библиотека webp поддерживает только декодирование). Если формат явно не указан, по умолчанию будет использоваться jpeg. Если трансформация не требуется (например, вы используете imageproxy только как SSL-прокси), то оригинальное webp-изображение будет передано без конверсии.
 
-Because so few browsers support tiff images, they will be converted to jpeg by
-default if any transformation is requested. To force encoding as tiff, pass the
-"tiff" option. Like webp, tiff images will be served as-is without any format
-conversion if no transformation is requested.
+Поскольку немногие браузеры поддерживают tiff, при трансформации tiff будет конвертироваться в jpeg по умолчанию. Чтобы принудительно получить tiff, передайте опцию `tiff`. Как и в случае с webp, если трансформация не выполняется, оригинальный tiff будет передан без изменений.
 
-Run `imageproxy -help` for a complete list of flags the command accepts. If
-you want to use a different caching implementation, it's probably easiest to
-just make a copy of `cmd/imageproxy/main.go` and customize it to fit your
-needs... it's a very simple command.
+Запустите `imageproxy -help`, чтобы увидеть полный список флагов.
 
-### Environment Variables
+### Переменные окружения
 
-All configuration flags have equivalent environment variables of the form
-`IMAGEPROXY_$NAME`. For example, an on-disk cache could be configured by calling
+Все флаги имеют эквивалент в переменных окружения вида `IMAGEPROXY_$NAME`. Например, кэш на диске можно настроить так:
 
 ```sh
 IMAGEPROXY_CACHE="/tmp/imageproxy" imageproxy
 ```
 
-## Deploying
+Несколько префиксов хранилищ можно задать JSON-объектом:
 
-In most cases, you can follow the normal procedure for building a deploying any
-go application. For example:
+```sh
+IMAGEPROXY_STORAGES='{"tms":"https://tms-storage.example.com/","hr":"https://hr-storage.example.com/"}' imageproxy
+```
+
+## Развёртывание
+
+В большинстве случаев достаточно стандартной процедуры сборки и развёртывания Go-приложения. Например:
 
 - `go build willnorris.com/go/imageproxy/cmd/imageproxy`
-- copy resulting binary to `/usr/local/bin`
-- copy [`etc/imageproxy.service`](etc/imageproxy.service) to
-  `/lib/systemd/system` and enable using `systemctl`.
+- скопировать бинарник в `/usr/local/bin`
+- скопировать [`etc/imageproxy.service`](etc/imageproxy.service) в `/lib/systemd/system` и включить через `systemctl`.
 
-Instructions have been contributed below for running on other platforms, but I
-don't have much experience with them personally.
+Ниже представлены инструкции, присланные сообществом, для запуска на других платформах.
 
 ### Heroku
 
-It's easy to vendorize the dependencies with `Godep` and deploy to Heroku. Take
-a look at [this GitHub repo](https://github.com/oreillymedia/prototype-imageproxy/tree/heroku)
-(make sure you use the `heroku` branch).
+Проще всего вынести зависимости в vendor с помощью `Godep` и задеплоить на Heroku. Посмотрите этот [репозиторий](https://github.com/oreillymedia/prototype-imageproxy/tree/heroku) (ветка `heroku`).
 
 ### AWS Elastic Beanstalk
 
-[O’Reilly Media](https://github.com/oreillymedia) set up [a repository](https://github.com/oreillymedia/prototype-imageproxy)
-with everything you need to deploy imageproxy to Elastic Beanstalk. Just follow the instructions
-in the [README](https://github.com/oreillymedia/prototype-imageproxy/blob/master/Readme.md).
+[O’Reilly Media](https://github.com/oreillymedia) подготовили репозиторий с тем, что нужно для деплоя в Elastic Beanstalk. Следуйте инструкциям в их README.
 
 ### Docker
 
-A docker image is available at [`ghcr.io/willnorris/imageproxy`](https://github.com/willnorris/imageproxy/pkgs/container/imageproxy).
+Docker-образ доступен как `ghcr.io/willnorris/imageproxy`.
 
-You can run it by
+Запустить контейнер можно так:
 
 ```sh
 docker run -p 8080:8080 ghcr.io/willnorris/imageproxy -addr 0.0.0.0:8080
 ```
 
-Or in your Dockerfile:
+Или в вашем Dockerfile:
 
 ```Dockerfile
 ENTRYPOINT ["/app/imageproxy", "-addr 0.0.0.0:8080"]
 ```
 
-If running imageproxy inside docker with a bind-mounted on-disk cache, make sure
-the container is running as a user that has write permission to the mounted host
-directory. See more details in
-[#198](https://github.com/willnorris/imageproxy/issues/198).
+Если вы запускаете imageproxy в контейнере с примонтированным дисковым кэшем, убедитесь, что процесс внутри контейнера запущен от пользователя с правом записи в примонтированную директорию. Подробнее см. обсуждение в [#198](https://github.com/willnorris/imageproxy/issues/198).
 
-Note that all configuration options can be set using [environment
-variables](#environment-variables), which is often the preferred approach for
-containers.
+Учтите, что все параметры можно задать через переменные окружения, что удобно для контейнеризации.
 
 ### Caddy
 
-You can proxy requests to imageproxy in your Caddy config using the `reverse_proxy` directive:
+Можно проксировать запросы к imageproxy в конфигурации Caddy с помощью директивы `reverse_proxy`:
 
 ```Caddyfile
 @imageproxy path /api/imageproxy/*
@@ -436,10 +325,7 @@ handle @imageproxy {
 }
 ```
 
-You can also run an instance of imageproxy embedded in Caddy using the [caddy module](./caddy/).
-This requires a custom build of Caddy with the imageproxy module included
-([example](https://github.com/willnorris/willnorris.com/blob/main/cmd/caddy/caddy.go)),
-and configuring it with the `imageproxy` directive in your Caddyfile:
+Также можно встроить экземпляр imageproxy в Caddy через модуль [caddy/], см. каталог `caddy/`. Для этого потребуется кастомная сборка Caddy с включённым модулем imageproxy (см. пример) и конфигурация в Caddyfile:
 
 ```Caddyfile
 @imageproxy path /api/imageproxy/*
@@ -457,8 +343,7 @@ handle @imageproxy {
 
 ### nginx
 
-Use the `proxy_pass` directive to send requests to your imageproxy instance.
-For example, to run imageproxy at the path "/api/imageproxy/", set:
+Используйте `proxy_pass`, чтобы направить запросы в ваш экземпляр imageproxy. Например, чтобы обслуживать imageproxy по пути `/api/imageproxy/`, настройте:
 
 ```nginx
 location /api/imageproxy/ {
@@ -466,8 +351,7 @@ location /api/imageproxy/ {
 }
 ```
 
-Depending on other directives you may have in your nginx config, you might need
-to alter the precedence order by setting:
+В зависимости от других директив в вашей конфигурации, возможно, потребуется изменить приоритет, используя:
 
 ```nginx
 location ^~ /api/imageproxy/ {
@@ -475,16 +359,11 @@ location ^~ /api/imageproxy/ {
 }
 ```
 
-## Clients
+## Клиенты
 
-- [Hugo partial](https://github.com/willnorris/willnorris.com/blob/main/layouts/partials/imageproxy-url.html)
-  (I use this with an [`{{<img>}}` shortcode](https://github.com/willnorris/willnorris.com/blob/main/layouts/shortcodes/img.html)
-  like [this example](https://github.com/willnorris/willnorris.com/blob/b7f3451/content/about/index.md?plain=1#L7))
-- [Ruby](https://github.com/azolf/imageproxy_ruby)
+- [Hugo partial](https://github.com/willnorris/willnorris.com/blob/main/layouts/partials/imageproxy-url.html) (использую вместе с `{{<img>}}` shortcode)
+- [Ruby-клиент](https://github.com/azolf/imageproxy_ruby)
 
-## License
+## Лицензия
 
-imageproxy is copyright its respective authors. All of my personal work on
-imageproxy through 2020 (which accounts for the majority of the code) is
-copyright Google, my employer at the time. It is available under the [Apache
-2.0 License](./LICENSE).
+imageproxy защищён правами своих авторов. Моя личная работа над imageproxy до 2020 года (которая составляет большую часть кода) — это работа, выполненная при поддержке Google, моего работодателя в то время. Проект распространяется под лицензией Apache 2.0 (см. ./LICENSE).
