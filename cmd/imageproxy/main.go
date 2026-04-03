@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -50,10 +51,12 @@ var contentTypes = flag.String("contentTypes", "image/*", "comma separated list 
 var userAgent = flag.String("userAgent", "willnorris/imageproxy", "specify the user-agent used by imageproxy when fetching images from origin website")
 var minCacheDuration = flag.Duration("minCacheDuration", 0, "minimum duration to cache remote images")
 var forceCache = flag.Bool("forceCache", false, "Ignore no-store and private directives in responses")
+var storages prefixBaseURLsFlag
 
 func init() {
 	flag.Var(&cache, "cache", "location to cache images (see https://github.com/willnorris/imageproxy#cache)")
 	flag.Var(&signatureKeys, "signatureKey", "HMAC key used in calculating request signatures")
+	flag.Var(&storages, "storages", "JSON object mapping the first request path segment to a base URL")
 }
 
 func main() {
@@ -89,6 +92,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("error parsing baseURL: %v", err)
 		}
+	}
+	if len(storages) > 0 {
+		p.PrefixBaseURLs = map[string]*url.URL(storages)
 	}
 
 	p.IncludeReferer = *includeReferer
@@ -145,6 +151,80 @@ func (skl *signatureKeyList) Set(value string) error {
 		*skl = append(*skl, key)
 	}
 	return nil
+}
+
+type prefixBaseURLsFlag map[string]*url.URL
+
+func (pbuf *prefixBaseURLsFlag) String() string {
+	if len(*pbuf) == 0 {
+		return ""
+	}
+
+	raw := make(map[string]string, len(*pbuf))
+	for name, baseURL := range *pbuf {
+		raw[name] = baseURL.String()
+	}
+
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Sprint(raw)
+	}
+
+	return string(data)
+}
+
+func (pbuf *prefixBaseURLsFlag) Set(value string) error {
+	baseURLs, err := parseStorages(value)
+	if err != nil {
+		return err
+	}
+
+	if *pbuf == nil {
+		*pbuf = make(prefixBaseURLsFlag)
+	}
+
+	for name, baseURL := range baseURLs {
+		(*pbuf)[name] = baseURL
+	}
+
+	return nil
+}
+
+func parseStorages(value string) (map[string]*url.URL, error) {
+	raw := map[string]string{}
+	if err := json.Unmarshal([]byte(value), &raw); err != nil {
+		return nil, fmt.Errorf("error parsing storages: %w", err)
+	}
+
+	baseURLs := make(map[string]*url.URL, len(raw))
+	for name, rawURL := range raw {
+		name = strings.TrimSpace(name)
+		rawURL = strings.TrimSpace(rawURL)
+
+		switch {
+		case name == "":
+			return nil, fmt.Errorf("storage name cannot be empty")
+		case strings.Contains(name, "/"):
+			return nil, fmt.Errorf("storage name %q cannot contain /", name)
+		case rawURL == "":
+			return nil, fmt.Errorf("storage %q must define a base URL", name)
+		}
+
+		baseURL, err := url.Parse(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("storage %q has invalid base URL: %w", name, err)
+		}
+		if !baseURL.IsAbs() {
+			return nil, fmt.Errorf("storage %q must define an absolute base URL", name)
+		}
+		if baseURL.Scheme != "http" && baseURL.Scheme != "https" {
+			return nil, fmt.Errorf("storage %q must use http or https", name)
+		}
+
+		baseURLs[name] = baseURL
+	}
+
+	return baseURLs, nil
 }
 
 // tieredCache allows specifying multiple caches via flags, which will create
