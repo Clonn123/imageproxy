@@ -603,49 +603,100 @@ func TestProxy_newRequest(t *testing.T) {
 
 	tests := []struct {
 		name string
-		path string
+		url  string
 		want string
 	}{
 		{
 			name: "default base URL keeps legacy parsing",
-			path: "/avatars/user.png",
+			url:  "http://localhost/avatars/user.png",
 			want: "https://default.example.com/root/user.png#0x0",
 		},
 		{
 			name: "unknown prefix falls back to legacy parsing",
-			path: "/finance/report.png",
+			url:  "http://localhost/finance/report.png",
 			want: "https://default.example.com/root/report.png#0x0",
 		},
 		{
-			name: "storage prefix without options",
-			path: "/tms/invoices/logo.png",
+			name: "storage prefix without query options",
+			url:  "http://localhost/tms/invoices/logo.png",
 			want: "https://tms.example.com/media/invoices/logo.png#0x0",
 		},
 		{
-			name: "storage prefix with options",
-			path: "/hr/100x/avatars/user.png",
-			want: "https://hr.example.com/assets/avatars/user.png#100x0",
+			name: "storage prefix with query options",
+			url:  "http://localhost/hr/avatars/user.png?x=100&y=200&fit=true&format=png",
+			want: "https://hr.example.com/assets/avatars/user.png#100x200,fit,png",
 		},
 		{
 			name: "storage prefix preserves escaped path",
-			path: "/tms/http://example.com/%2C",
+			url:  "http://localhost/tms/http://example.com/%2C",
 			want: "http://example.com/%2C#0x0",
+		},
+		{
+			name: "storage query does not become origin query",
+			url:  "http://localhost/tms/path/to/file.jpg?x=300",
+			want: "https://tms.example.com/media/path/to/file.jpg#300x0",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://localhost"+tt.path, nil)
+			req := httptest.NewRequest("GET", tt.url, nil)
 
 			got, err := p.newRequest(req)
 			if err != nil {
-				t.Fatalf("newRequest(%q) returned unexpected error: %v", tt.path, err)
+				t.Fatalf("newRequest(%q) returned unexpected error: %v", tt.url, err)
 			}
 
 			if got := got.String(); got != tt.want {
-				t.Errorf("newRequest(%q) returned %q, want %q", tt.path, got, tt.want)
+				t.Errorf("newRequest(%q) returned %q, want %q", tt.url, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseOptionsFromQuery(t *testing.T) {
+	values := url.Values{
+		"x":       {"300"},
+		"y":       {"200"},
+		"fit":     {"true"},
+		"r":       {"90"},
+		"fv":      {""},
+		"fh":      {"1"},
+		"q":       {"80"},
+		"s":       {"deadbeef"},
+		"scaleUp": {"false"},
+		"format":  {"jpg"},
+		"cx":      {"10"},
+		"cy":      {"20"},
+		"cw":      {"30"},
+		"ch":      {"40"},
+		"sc":      {"true"},
+		"trim":    {""},
+		"vu":      {"1234567890"},
+	}
+
+	got := parseOptionsFromQuery(values)
+	want := Options{
+		Width:          300,
+		Height:         200,
+		Fit:            true,
+		Rotate:         90,
+		FlipVertical:   true,
+		FlipHorizontal: true,
+		Quality:        80,
+		Signature:      "deadbeef",
+		Format:         "jpeg",
+		CropX:          10,
+		CropY:          20,
+		CropWidth:      30,
+		CropHeight:     40,
+		SmartCrop:      true,
+		Trim:           true,
+		ValidUntil:     time.Unix(1234567890, 0),
+	}
+
+	if got != want {
+		t.Errorf("parseOptionsFromQuery returned %#v, want %#v", got, want)
 	}
 }
 

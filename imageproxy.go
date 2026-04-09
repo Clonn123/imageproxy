@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"path"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,9 +69,10 @@ type Proxy struct {
 	// PrefixBaseURLs maps the first path segment of an incoming request to a
 	// base URL used to resolve relative remote URLs. For example, with
 	// PrefixBaseURLs["tms"] = https://storage.example.com/, a request to
-	// /tms/path/to/image.jpg is resolved against that base URL. Once the prefix
-	// is removed, the remainder of the path still uses the normal imageproxy URL
-	// format, so /tms/100x/path/to/image.jpg works as expected.
+	// /tms/path/to/image.jpg?x=300 is resolved against that base URL. Once the
+	// prefix is removed, the remainder of the path is treated as the remote path
+	// relative to the configured base URL, and query parameters configure image
+	// transformations for this proxy request.
 	PrefixBaseURLs map[string]*url.URL
 
 	// The Logger used by the image proxy
@@ -411,11 +413,7 @@ func (p *Proxy) now() time.Time {
 
 func (p *Proxy) newRequest(r *http.Request) (*Request, error) {
 	if prefixBaseURL, path, ok := p.prefixBaseURL(r.URL.EscapedPath()); ok {
-		req := cloneRequestWithPath(r, path)
-		if hasOptionsPath(path) {
-			return NewRequest(req, prefixBaseURL)
-		}
-		return newRequestWithoutOptions(req, prefixBaseURL)
+		return newStorageRequest(cloneRequestWithPath(r, path), prefixBaseURL)
 	}
 
 	return NewRequest(r, p.DefaultBaseURL)
@@ -464,17 +462,7 @@ func cloneRequestWithPath(r *http.Request, path string) *http.Request {
 	return req
 }
 
-func hasOptionsPath(path string) bool {
-	path = strings.TrimPrefix(path, "/")
-	if path == "" {
-		return false
-	}
-
-	options, _, _ := strings.Cut(path, "/")
-	return options == "" || options == "0x0" || ParseOptions(options) != (Options{})
-}
-
-func newRequestWithoutOptions(r *http.Request, baseURL *url.URL) (*Request, error) {
+func newStorageRequest(r *http.Request, baseURL *url.URL) (*Request, error) {
 	req := &Request{Original: r}
 
 	path := r.URL.EscapedPath()[1:] // strip leading slash
@@ -482,11 +470,12 @@ func newRequestWithoutOptions(r *http.Request, baseURL *url.URL) (*Request, erro
 		return nil, URLError{"too few path segments", r.URL}
 	}
 
-	remoteURL, enc, err := parseURL(path, baseURL)
+	remoteURL, _, err := parseURL(path, baseURL)
 	if err != nil {
 		return nil, URLError{fmt.Sprintf("unable to parse remote URL: %v", err), r.URL}
 	}
 	req.URL = remoteURL
+	req.Options = parseOptionsFromQuery(r.URL.Query())
 
 	if baseURL != nil {
 		req.URL = baseURL.ResolveReference(req.URL)
@@ -500,13 +489,133 @@ func newRequestWithoutOptions(r *http.Request, baseURL *url.URL) (*Request, erro
 		return nil, URLError{"remote URL must have http or https scheme", r.URL}
 	}
 
-	if !enc {
-		// if the remote URL was not base64 or URL encoded,
-		// then the query string is part of the remote URL
-		req.URL.RawQuery = r.URL.RawQuery
+	return req, nil
+}
+
+func parseOptionsFromQuery(values url.Values) Options {
+	var options Options
+
+	if width, ok := queryFloat(values, "x"); ok {
+		options.Width = width
+	}
+	if height, ok := queryFloat(values, "y"); ok {
+		options.Height = height
+	}
+	if fit, ok := queryBool(values, "fit"); ok {
+		options.Fit = fit
+	}
+	if rotate, ok := queryInt(values, "r"); ok {
+		options.Rotate = rotate
+	}
+	if flipVertical, ok := queryBool(values, "fv"); ok {
+		options.FlipVertical = flipVertical
+	}
+	if flipHorizontal, ok := queryBool(values, "fh"); ok {
+		options.FlipHorizontal = flipHorizontal
+	}
+	if quality, ok := queryInt(values, "q"); ok {
+		options.Quality = quality
+	}
+	if signature, ok := queryValue(values, "s"); ok {
+		options.Signature = signature
+	}
+	if scaleUp, ok := queryBool(values, "scaleUp"); ok {
+		options.ScaleUp = scaleUp
+	}
+	if format, ok := queryValue(values, "format"); ok {
+		switch strings.ToLower(format) {
+		case "jpg", "jpeg":
+			options.Format = "jpeg"
+		case "png", "tiff":
+			options.Format = strings.ToLower(format)
+		}
+	}
+	if cropX, ok := queryFloat(values, "cx"); ok {
+		options.CropX = cropX
+	}
+	if cropY, ok := queryFloat(values, "cy"); ok {
+		options.CropY = cropY
+	}
+	if cropWidth, ok := queryFloat(values, "cw"); ok {
+		options.CropWidth = cropWidth
+	}
+	if cropHeight, ok := queryFloat(values, "ch"); ok {
+		options.CropHeight = cropHeight
+	}
+	if smartCrop, ok := queryBool(values, "sc"); ok {
+		options.SmartCrop = smartCrop
+	}
+	if trim, ok := queryBool(values, "trim"); ok {
+		options.Trim = trim
+	}
+	if validUntil, ok := queryInt64(values, "vu"); ok && validUntil > 0 {
+		options.ValidUntil = time.Unix(validUntil, 0)
 	}
 
-	return req, nil
+	return options
+}
+
+func queryValue(values url.Values, key string) (string, bool) {
+	vals, ok := values[key]
+	if !ok || len(vals) == 0 {
+		return "", false
+	}
+	return vals[len(vals)-1], true
+}
+
+func queryBool(values url.Values, key string) (bool, bool) {
+	val, ok := queryValue(values, key)
+	if !ok {
+		return false, false
+	}
+	if val == "" {
+		return true, true
+	}
+
+	parsed, err := strconv.ParseBool(val)
+	if err != nil {
+		return false, false
+	}
+	return parsed, true
+}
+
+func queryInt(values url.Values, key string) (int, bool) {
+	val, ok := queryValue(values, key)
+	if !ok || val == "" {
+		return 0, false
+	}
+
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func queryInt64(values url.Values, key string) (int64, bool) {
+	val, ok := queryValue(values, key)
+	if !ok || val == "" {
+		return 0, false
+	}
+
+	parsed, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func queryFloat(values url.Values, key string) (float64, bool) {
+	val, ok := queryValue(values, key)
+	if !ok || val == "" {
+		return 0, false
+	}
+
+	parsed, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 // allowed determines whether the specified request contains an allowed

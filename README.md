@@ -22,9 +22,10 @@ imageproxy — это кэширующий прокси-сервер изобр�
 URL-ы imageproxy имеют формат `http://localhost/{options}/{remote_url}`.
 
 При использовании настроенных префиксов хранилища URL принимает вид
-`http://localhost/{storage}/{options}/{remote_url}` или
-`http://localhost/{storage}/{remote_url}`. Сегмент `{storage}` выбирает настроенный
-базовый URL, после чего оставшаяся часть пути парсится как обычно.
+`http://localhost/{storage}/{remote_path}?x=300&y=200`.
+Сегмент `{storage}` выбирает настроенный базовый URL, оставшаяся часть пути
+трактуется как путь к файлу в хранилище, а query-параметры управляют
+трансформациями изображения.
 
 ### Опции
 
@@ -237,11 +238,13 @@ imageproxy -storages '{"tms":"https://tms-storage.example.com/","hr":"https://hr
 После этого запросы вида:
 
 ```text
-http://localhost:8080/tms/path/to/image.jpg
-http://localhost:8080/hr/300x/avatars/user.jpg
+http://localhost:8080/tms/path/to/image.jpg?x=300
+http://localhost:8080/hr/avatars/user.jpg?x=300&y=200&fit=true
 ```
 
-будут разрешаться относительно настроенного URL хранилища, а затем к ним будет применён обычный парсинг imageproxy.
+будут разрешаться относительно настроенного URL хранилища. Query-параметры
+будут преобразованы во внутренние опции imageproxy и применены к полученному
+из origin изображению.
 
 Если нужно разрешать файлы в поддиректории, включите завершающий слеш в базовом URL, например `https://storage.example.com/bucket/`.
 
