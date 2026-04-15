@@ -230,7 +230,11 @@ imageproxy -baseURL https://octodex.github.com/
 Если нужно, чтобы один экземпляр imageproxy обслуживал несколько исходных хранилищ, настройте флаг `storages` с JSON-объектом, который отображает первый сегмент пути на базовый URL:
 
 ```sh
-imageproxy -storages '{"tms":"https://tms-storage.example.com/","hr":"https://hr-storage.example.com/"}'
+imageproxy -storages '{"tms":"https://tms-storage.example.com/","dev":"https://dev-storage.example.com/"}'
+```
+
+```sh
+imageproxy -storages '{"tms":"https://tms-storage.example.com/","dev":{"type":"s3","endpoint":"http://dev-core-minio:9000","bucket":"main","accessKey":"test","secretKey":"test","forcePathStyle":true,"disableSSL":true}}'
 ```
 
 Ту же настройку можно передать через переменную окружения `IMAGEPROXY_STORAGES`.
@@ -239,7 +243,7 @@ imageproxy -storages '{"tms":"https://tms-storage.example.com/","hr":"https://hr
 
 ```text
 http://localhost:8080/tms/path/to/image.jpg?x=300
-http://localhost:8080/hr/avatars/user.jpg?x=300&y=200&fit=true
+http://localhost:8080/dev/avatars/user.jpg?x=300&y=200&fit=true
 ```
 
 будут разрешаться относительно настроенного URL хранилища. Query-параметры
@@ -275,7 +279,11 @@ IMAGEPROXY_CACHE="/tmp/imageproxy" imageproxy
 Несколько префиксов хранилищ можно задать JSON-объектом:
 
 ```sh
-IMAGEPROXY_STORAGES='{"tms":"https://tms-storage.example.com/","hr":"https://hr-storage.example.com/"}' imageproxy
+IMAGEPROXY_STORAGES='{"tms":"https://tms-storage.example.com/","dev":"https://dev-storage.example.com/"}' imageproxy
+```
+
+```sh
+IMAGEPROXY_STORAGES='{"tms":"https://tms-storage.example.com/","dev":{"type":"s3","endpoint":"http://dev-core-minio:9000","bucket":"main","accessKey":"test","secretKey":"test","forcePathStyle":true,"disableSSL":true}}' imageproxy
 ```
 
 ## Развёртывание

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"log"
 	"maps"
 	"net/http"
@@ -175,7 +176,7 @@ func TestAllowed(t *testing.T) {
 		if err != nil {
 			t.Errorf("error parsing url %q: %v", tt.url, err)
 		}
-		req := &Request{u, tt.options, tt.request}
+		req := &Request{URL: u, Options: tt.options, Original: tt.request}
 		if got, want := p.allowed(req), tt.allowed; (got == nil) != want {
 			t.Errorf("allowed(%q) returned %v, want %v.\nTest struct: %#v", req, got, want, tt)
 		}
@@ -258,7 +259,7 @@ func TestValidSignature(t *testing.T) {
 		if err != nil {
 			t.Errorf("error parsing url %q: %v", tt.url, err)
 		}
-		req := &Request{u, tt.options, &http.Request{}}
+		req := &Request{URL: u, Options: tt.options, Original: &http.Request{}}
 		if got, want := validSignature(key, req), tt.valid; got != want {
 			t.Errorf("validSignature(%v, %v) returned %v, want %v", key, req, got, want)
 		}
@@ -654,6 +655,46 @@ func TestProxy_newRequest(t *testing.T) {
 	}
 }
 
+func TestProxy_newRequest_s3Storage(t *testing.T) {
+	endpoint, _ := url.Parse("http://dev-core-minio:9000")
+	p := &Proxy{
+		PrefixStorages: map[string]*PrefixStorage{
+			"hr": {
+				S3: &S3Storage{
+					Endpoint:       endpoint,
+					Bucket:         "main",
+					AccessKey:      "Test",
+					SecretKey:      "T12345678",
+					ForcePathStyle: true,
+					DisableSSL:     true,
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "http://localhost/dev/2026/01/14/avatar.jpeg?x=300&y=300", nil)
+	got, err := p.newRequest(req)
+	if err != nil {
+		t.Fatalf("newRequest returned unexpected error: %v", err)
+	}
+
+	if got.FetchURL == nil {
+		t.Fatalf("newRequest did not set FetchURL for s3 storage")
+	}
+	if gotURL, want := got.URL.String(), "http://dev-core-minio:9000/main/2026/01/14/avatar.jpeg"; gotURL != want {
+		t.Fatalf("newRequest URL = %q, want %q", gotURL, want)
+	}
+	if got.FetchURL.RawQuery == "" {
+		t.Fatalf("FetchURL should include a presigned query")
+	}
+	if got.FetchURL.Host != "dev-core-minio:9000" {
+		t.Fatalf("FetchURL host = %q, want %q", got.FetchURL.Host, "dev-core-minio:9000")
+	}
+	if got.Options.Width != 300 || got.Options.Height != 300 {
+		t.Fatalf("unexpected options: %#v", got.Options)
+	}
+}
+
 func TestParseOptionsFromQuery(t *testing.T) {
 	values := url.Values{
 		"x":       {"300"},
@@ -697,6 +738,39 @@ func TestParseOptionsFromQuery(t *testing.T) {
 
 	if got != want {
 		t.Errorf("parseOptionsFromQuery returned %#v, want %#v", got, want)
+	}
+}
+
+type captureTransport struct {
+	requestedURL string
+}
+
+func (t *captureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.requestedURL = req.URL.String()
+	return &http.Response{
+		Status:     "200 OK",
+		StatusCode: http.StatusOK,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("ok")),
+		Request:    req,
+	}, nil
+}
+
+func TestTransformingTransport_OriginOverrideHeader(t *testing.T) {
+	transport := &captureTransport{}
+	req := httptest.NewRequest("GET", "http://logical.example.com/image.jpg", nil)
+	req.Header.Set(originURLOverrideHeader, "http://signed.example.com/image.jpg?X-Amz-Signature=abc")
+
+	tt := &TransformingTransport{Transport: transport}
+	if _, err := tt.RoundTrip(req); err != nil {
+		t.Fatalf("RoundTrip returned unexpected error: %v", err)
+	}
+
+	if got, want := transport.requestedURL, "http://signed.example.com/image.jpg?X-Amz-Signature=abc"; got != want {
+		t.Fatalf("transport requested URL = %q, want %q", got, want)
 	}
 }
 

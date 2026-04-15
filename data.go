@@ -332,6 +332,7 @@ func ParseOptions(str string) Options {
 // proxy, and an optional set of transformations to perform.
 type Request struct {
 	URL      *url.URL      // URL of the image to proxy
+	FetchURL *url.URL      // optional URL used to fetch the image origin
 	Options  Options       // Image transformation to perform
 	Original *http.Request // The original HTTP request
 }

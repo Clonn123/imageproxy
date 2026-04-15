@@ -75,6 +75,12 @@ type Proxy struct {
 	// transformations for this proxy request.
 	PrefixBaseURLs map[string]*url.URL
 
+	// PrefixStorages maps the first path segment of an incoming request to a
+	// storage definition. HTTP storages behave like PrefixBaseURLs. S3 storages
+	// generate signed origin requests while keeping a stable logical URL for
+	// cache keys and request signatures.
+	PrefixStorages map[string]*PrefixStorage
+
 	// The Logger used by the image proxy
 	Logger *log.Logger
 
@@ -266,6 +272,9 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	req.Options.ScaleUp = p.ScaleUp
 
 	actualReq, _ := http.NewRequest("GET", req.String(), nil)
+	if req.FetchURL != nil {
+		actualReq.Header.Set(originURLOverrideHeader, req.FetchURL.String())
+	}
 	if p.UserAgent != "" {
 		actualReq.Header.Set("User-Agent", p.UserAgent)
 	}
@@ -404,6 +413,8 @@ var (
 	msgNotAllowedInRedirect = "requested URL in redirect is not allowed"
 )
 
+const originURLOverrideHeader = "X-Imageproxy-Origin-URL"
+
 func (p *Proxy) now() time.Time {
 	if !p.timeNow.IsZero() {
 		return p.timeNow
@@ -412,15 +423,15 @@ func (p *Proxy) now() time.Time {
 }
 
 func (p *Proxy) newRequest(r *http.Request) (*Request, error) {
-	if prefixBaseURL, path, ok := p.prefixBaseURL(r.URL.EscapedPath()); ok {
-		return newStorageRequest(cloneRequestWithPath(r, path), prefixBaseURL)
+	if storage, path, ok := p.prefixStorage(r.URL.EscapedPath()); ok {
+		return newStorageRequest(cloneRequestWithPath(r, path), storage)
 	}
 
 	return NewRequest(r, p.DefaultBaseURL)
 }
 
-func (p *Proxy) prefixBaseURL(path string) (_ *url.URL, strippedPath string, ok bool) {
-	if len(p.PrefixBaseURLs) == 0 {
+func (p *Proxy) prefixStorage(path string) (_ *PrefixStorage, strippedPath string, ok bool) {
+	if len(p.PrefixStorages) == 0 && len(p.PrefixBaseURLs) == 0 {
 		return nil, "", false
 	}
 
@@ -430,17 +441,20 @@ func (p *Proxy) prefixBaseURL(path string) (_ *url.URL, strippedPath string, ok 
 	}
 
 	prefix, remainder, found := strings.Cut(path, "/")
-	baseURL, ok := p.PrefixBaseURLs[prefix]
-	if !ok {
-		return nil, "", false
-	}
-
 	strippedPath = "/"
 	if found {
 		strippedPath += remainder
 	}
 
-	return baseURL, strippedPath, true
+	if storage, ok := p.PrefixStorages[prefix]; ok {
+		return storage, strippedPath, true
+	}
+
+	if baseURL, ok := p.PrefixBaseURLs[prefix]; ok {
+		return &PrefixStorage{BaseURL: baseURL}, strippedPath, true
+	}
+
+	return nil, "", false
 }
 
 func cloneRequestWithPath(r *http.Request, path string) *http.Request {
@@ -462,7 +476,7 @@ func cloneRequestWithPath(r *http.Request, path string) *http.Request {
 	return req
 }
 
-func newStorageRequest(r *http.Request, baseURL *url.URL) (*Request, error) {
+func newStorageRequest(r *http.Request, storage *PrefixStorage) (*Request, error) {
 	req := &Request{Original: r}
 
 	path := r.URL.EscapedPath()[1:] // strip leading slash
@@ -470,15 +484,26 @@ func newStorageRequest(r *http.Request, baseURL *url.URL) (*Request, error) {
 		return nil, URLError{"too few path segments", r.URL}
 	}
 
-	remoteURL, _, err := parseURL(path, baseURL)
-	if err != nil {
-		return nil, URLError{fmt.Sprintf("unable to parse remote URL: %v", err), r.URL}
-	}
-	req.URL = remoteURL
 	req.Options = parseOptionsFromQuery(r.URL.Query())
-
-	if baseURL != nil {
-		req.URL = baseURL.ResolveReference(req.URL)
+	switch {
+	case storage == nil:
+		return nil, URLError{"storage is not configured", r.URL}
+	case storage.S3 != nil:
+		logicalURL, fetchURL, err := storage.S3.PresignedGetURL(decodeStorageObjectPath(path))
+		if err != nil {
+			return nil, URLError{fmt.Sprintf("unable to prepare s3 origin URL: %v", err), r.URL}
+		}
+		req.URL = logicalURL
+		req.FetchURL = fetchURL
+	default:
+		remoteURL, _, err := parseURL(path, storage.BaseURL)
+		if err != nil {
+			return nil, URLError{fmt.Sprintf("unable to parse remote URL: %v", err), r.URL}
+		}
+		req.URL = remoteURL
+		if storage.BaseURL != nil {
+			req.URL = storage.BaseURL.ResolveReference(req.URL)
+		}
 	}
 
 	if !req.URL.IsAbs() {
@@ -487,6 +512,14 @@ func newStorageRequest(r *http.Request, baseURL *url.URL) (*Request, error) {
 
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 		return nil, URLError{"remote URL must have http or https scheme", r.URL}
+	}
+	if req.FetchURL != nil {
+		if !req.FetchURL.IsAbs() {
+			return nil, URLError{"fetch URL must be absolute", r.URL}
+		}
+		if req.FetchURL.Scheme != "http" && req.FetchURL.Scheme != "https" {
+			return nil, URLError{"fetch URL must have http or https scheme", r.URL}
+		}
 	}
 
 	return req, nil
@@ -802,10 +835,14 @@ type TransformingTransport struct {
 func (t *TransformingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Fragment == "" {
 		// normal requests pass through
-		if t.log != nil {
-			t.log("fetching remote URL: %v", req.URL)
+		originReq, err := requestForOriginFetch(req)
+		if err != nil {
+			return nil, err
 		}
-		resp, err := t.Transport.RoundTrip(req)
+		if t.log != nil {
+			t.log("fetching remote URL: %v", originReq.URL)
+		}
+		resp, err := t.Transport.RoundTrip(originReq)
 		if err == nil && t.updateCacheHeaders != nil {
 			t.updateCacheHeaders(resp.Header)
 		}
@@ -870,4 +907,23 @@ func (t *TransformingTransport) RoundTrip(req *http.Request) (*http.Response, er
 	buf.Write(img)
 
 	return http.ReadResponse(bufio.NewReader(buf), req)
+}
+
+func requestForOriginFetch(req *http.Request) (*http.Request, error) {
+	override := req.Header.Get(originURLOverrideHeader)
+	if override == "" {
+		return req, nil
+	}
+
+	originURL, err := url.Parse(override)
+	if err != nil {
+		return nil, fmt.Errorf("invalid origin override URL: %w", err)
+	}
+
+	originReq := req.Clone(req.Context())
+	originReq.Header = req.Header.Clone()
+	originReq.Header.Del(originURLOverrideHeader)
+	originReq.URL = originURL
+	originReq.RequestURI = ""
+	return originReq, nil
 }
