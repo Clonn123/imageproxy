@@ -672,7 +672,7 @@ func TestProxy_newRequest_s3Storage(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest("GET", "http://localhost/dev/2026/01/14/avatar.jpeg?x=300&y=300", nil)
+	req := httptest.NewRequest("GET", "http://localhost/hr/2026/01/14/avatar.jpeg?x=300&y=300", nil)
 	got, err := p.newRequest(req)
 	if err != nil {
 		t.Fatalf("newRequest returned unexpected error: %v", err)

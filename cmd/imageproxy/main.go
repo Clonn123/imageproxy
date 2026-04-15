@@ -241,18 +241,23 @@ func parseStorage(raw json.RawMessage) (*imageproxy.PrefixStorage, error) {
 		return nil, fmt.Errorf("invalid storage config: %w", err)
 	}
 
-	switch storageType := strings.ToLower(strings.TrimSpace(cfg.Type)); storageType {
-	case "", "http":
-		baseURL := strings.TrimSpace(cfg.URL)
-		if baseURL == "" {
-			baseURL = strings.TrimSpace(cfg.BaseURL)
-		}
-		if baseURL == "" && cfg.Bucket != "" {
-			storageType = "s3"
-		} else {
+	storageType := strings.ToLower(strings.TrimSpace(cfg.Type))
+	baseURL := strings.TrimSpace(cfg.URL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(cfg.BaseURL)
+	}
+
+	switch storageType {
+	case "":
+		if baseURL != "" {
 			return parseHTTPStorage(baseURL)
 		}
-		fallthrough
+		if cfg.Bucket != "" {
+			return parseS3Storage(cfg)
+		}
+		return nil, fmt.Errorf("must define either baseURL/url or s3 bucket")
+	case "http":
+		return parseHTTPStorage(baseURL)
 	case "s3":
 		return parseS3Storage(cfg)
 	default:
